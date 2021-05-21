@@ -1,6 +1,6 @@
 import numpy as np
 import cv2
-from typing import Tuple
+from typing import Tuple, Optional
 
 class SIFT:
     sigma: float
@@ -8,12 +8,18 @@ class SIFT:
     init_sigma: float
     n_octave_layers: int
     contrast_threshold: float
+    # width of border in which to ignore keypoints
+    img_border: int 
+    # maximum steps of keypoint interpolation before failure
+    max_interp_steps: int
 
     def __init__(self):
         self.sigma = 1.6
         self.init_sigma = 0.5
         self.n_octave_layers = 3
         self.contrast_threshold = 0.04
+        self.img_border = 5
+        self.max_interp_steps = 5
     
 
     def create_initial_image(self, image: np.ndarray) -> np.ndarray:
@@ -57,6 +63,7 @@ class SIFT:
 
         return np.array(images)
     
+
     def build_dog_pyramid(self, images: np.ndarray) -> np.ndarray:
         dog_images = []
         for images_in_octave in images:
@@ -66,3 +73,99 @@ class SIFT:
             dog_images.append(dog_images_in_octave)
 
         return np.array(dog_images)
+        
+    
+    def find_scale_space_extrema(self, images: np.ndarray, dog_images: np.ndarray):
+        keypoints = []
+        
+        for octave_idx, dog_images_in_octave in enumerate(dog_images):
+            for image_idx, (prev_image, cur_image, next_image) in enumerate(zip(dog_images_in_octave, dog_images_in_octave[1:], dog_images_in_octave[2:])):
+                for row in range(self.img_border, cur_image.shape[0] - self.img_border):
+                    for col in range(self.img_border, cur_image.shape[1] - self.img_border):
+                        if self.is_extreme(prev_image[row-1:row+2, col-1:col+2], cur_image[row-1:row+2, col-1:col+2], next_image[row-1:row+2, col-1:col+2]):
+                            pass
+
+
+    def is_extreme(self, prev_region: np.ndarray, cur_region: np.ndarray, next_region: np.ndarray) -> bool:
+        threshold = np.floor(0.5 * self.contrast_threshold / self.n_octave_layers * 255)
+        # TODO
+        # threshold = np.floor(0.5 * self.contrast_threshold / self.n_octave_layers * 255 * 48)
+        
+        val = cur_region[1, 1]
+        if abs(val) > threshold:
+            if val > 0:
+                return np.all(val >= prev_region) and np.all(val >= cur_region) and np.all(val >= next_region)
+            elif val < 0:
+                return np.all(val <= prev_region) and np.all(val <= cur_region) and np.all(val <= next_region)
+        return False
+        
+        
+    def adjust_local_extrema(self, dog_images_in_ocatave: np.ndarray, row: int, col: int, image_idx: int, octave_idx: int, sigma: float) -> Optional[cv2.KeyPoint]:
+        image_shape = dog_images_in_ocatave[0].shape
+
+        for i in range(self.max_interp_steps):
+            prev_image, cur_image, next_image = dog_images_in_ocatave[image_idx-1:image_idx+2]
+            pixel_cube = np.array([prev_image, cur_image, next_image])
+            # TODO unit8, or float32?
+            
+            # calculate approximate gradient
+            dx = 0.5 * (pixel_cube[1, 1, 2] - pixel_cube[1, 1, 0])
+            dy = 0.5 * (pixel_cube[1, 2, 1] - pixel_cube[1, 0, 1])
+            ds = 0.5 * (pixel_cube[2, 1, 1] - pixel_cube[0, 1, 1])
+            
+            dD = np.array([dx, dy, ds])
+            
+            # calculate approximate hessian
+            dxx = pixel_cube[1, 1, 2] - 2 * pixel_cube[1, 1, 1] + pixel_cube[1, 1, 0]
+            dyy = pixel_cube[1, 2, 1] - 2 * pixel_cube[1, 1, 1] + pixel_cube[1, 0, 1]
+            dss = pixel_cube[2, 1, 1] - 2 * pixel_cube[1, 1, 1] + pixel_cube[0, 1, 1]
+            dxy = 0.25 * (pixel_cube[1, 2, 2] - pixel_cube[1, 2, 0] - pixel_cube[1, 0, 2] + pixel_cube[1, 0, 0])
+            dxs = 0.25 * (pixel_cube[2, 1, 2] - pixel_cube[0, 1, 2] - pixel_cube[2, 1, 0] + pixel_cube[0, 1, 0])
+            dys = 0.25 * (pixel_cube[2, 2, 1] - pixel_cube[2, 0, 1] - pixel_cube[0, 2, 1] + pixel_cube[0, 0, 1])
+            
+            H = np.array([[dxx, dxy, dxs],
+                          [dxy, dyy, dys],
+                          [dxs, dys, dss]])
+                        
+            # x = -H^{-1} dD
+            # use lstsq in case of a singular matrix
+            x = -np.linalg.lstsq(H, dD, rcond=None)[0]
+            
+            if (abs(x[0]) < 0.5 and abs(x[1]) < 0.5 and abs(x[2]) < 0.5):
+                break
+            
+            row += int(np.round(x[0]))
+            col += int(np.round(x[1]))
+            image_idx += int(np.round(x[2]))
+            
+            if image_idx < 1 or image_idx > self.n_octave_layers or row < self.img_border or row >= image_shape[0] - self.img_border or col < self.img_border or col >= image_shape[1] - self.img_border:
+                return None
+            
+        if i >= self.max_interp_steps:
+            return None
+            
+        contr = pixel_cube[1, 1, 1] + 0.5 * dD.dot(x)
+        
+        # G.Lowe(2004) p.11
+        contrast_threshold = 0.04
+        if abs(contr) * self.n_octave_layers < contrast_threshold:
+            return None
+            
+        H_xy = H[:2, :2]
+        tr = np.trace(H_xy)
+        det = np.linalg.det(H_xy)
+        
+        # ratio of eigenvalues
+        edge_threshold = 10
+        # G.Lowe(2004) p.12
+        if det <= 0 or (tr ** 2) * edge_threshold >= ((edge_threshold + 1) ** 2) * det:
+            return None
+            
+        keypoint = cv2.KeyPoint()
+        keypoint.pt = (row + x[0]) * (2 ** octave_idx), (col + x[1]) * (2 ** octave_idx)
+        keypoint.octave = octave_idx + (image_idx << 8) + ((np.round(x[2] + 0.5) * 255) << 16)
+        keypoint.size = sigma * (2 ** ((image_idx + x[2]) / self.n_octave_layers)) * (2 ** (octave_idx + 1))
+        keypoint.response = abs(contr)
+        
+        return keypoint
+        
