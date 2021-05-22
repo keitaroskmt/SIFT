@@ -169,3 +169,62 @@ class SIFT:
         
         return keypoint
         
+    def calc_keypoint_with_orientations(self, keypoint: cv2.Keypoint, image: np.ndarray, octave_idx: int, sigma: float):
+        scl_octv = keypoint.size * 0.5 / (2 ** octave_idx)
+        radius = int(np.round(4.5 * scl_octv))
+        expf_scale = -1.0 / (2.0 * (sigma ** 2))
+        num_bins = 36
+        raw_hist = np.zeros(num_bins)
+        smooth_hist = np.zeros(num_bins)
+    
+        for i in range(-radius, radius + 1):
+            x = int(keypoint.pt.x / (2 ** octave_idx)) + i
+            if x <= 0 or x >= image.shape[0] - 1:
+                continue
+
+            for j in range(-radius, radius + 1):
+                y = int(keypoint.pt.y / (2 ** octave_idx)) + j
+                if y <= 0 or y >= image.shape[1] - 1:
+                    continue
+                
+                dx = image[x, y+1] - image[x, y-1]
+                dy = image[x-1, y] - image[x+1, y]
+                
+                mag = np.sqrt(dx ** 2 + dy ** 2)
+                ori = np.rad2deg(np.arctan2(dy, dx))
+                weight = np.exp(expf_scale * (i ** 2 + j ** 2))
+                hist_idx = int(np.round(ori / 360.0 * num_bins)) % num_bins
+                raw_hist[hist_idx] += weight * mag
+                
+        for i in range(num_bins):
+            smooth_hist[i] = raw_hist[i] * (6.0 / 16.0) + \
+                (raw_hist[(i+1) % num_bins] + raw_hist[(i-1) % num_bins]) * (4.0 / 16.0) + \
+                (raw_hist[(i+2) % num_bins] + raw_hist[(i-2) % num_bins]) * (1.0 / 16.0)
+            
+        max_val = np.max(smooth_hist)
+        
+        keypoints = []
+        mag_threshold = max_val * 0.8
+        for i in range(num_bins):
+            left = i-1 if i > 0 else num_bins-1
+            right = i+1 if i < num_bins-1 else 0
+            val = smooth_hist[i]
+            left_val = smooth_hist[left]
+            right_val = smooth_hist[right]
+            
+            if val > left_val and val > right_val and val > mag_threshold:
+                # quadratic interpolation
+                interpolated_idx = (i + 0.5 * (left_val - right_val) / (left_val - 2 * val + right_val)) % num_bins
+                angle = 360.0 - (360.0 / num_bins * interpolated_idx)
+                if abs(angle - 360.0) < 1e-7:
+                    angle = 0.0
+                keypoints.append(cv2.KeyPoint(*keypoint.pt, keypoint.size, angle, keypoint.response, keypoint.octave))
+                
+        return keypoints
+
+    
+
+
+
+                
+                
