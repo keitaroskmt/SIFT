@@ -1,6 +1,6 @@
 import numpy as np
 import cv2
-from typing import Tuple, Optional
+from typing import List, Tuple, Optional
 
 class SIFT:
     sigma: float
@@ -104,7 +104,7 @@ class SIFT:
         return np.array(dog_images, dtype=object)
         
     
-    def find_scale_space_extrema(self, images: np.ndarray, dog_images: np.ndarray) -> list[cv2.KeyPoint]:
+    def find_scale_space_extrema(self, images: np.ndarray, dog_images: np.ndarray) -> List[cv2.KeyPoint]:
         """
         find scale-space extrema in the image pyramid
         """
@@ -212,7 +212,7 @@ class SIFT:
         return (keypoint, image_idx)
         
 
-    def calc_keypoint_with_orientations(self, keypoint: cv2.KeyPoint, image: np.ndarray, octave_idx: int) -> list[cv2.KeyPoint]:
+    def calc_keypoint_with_orientations(self, keypoint: cv2.KeyPoint, image: np.ndarray, octave_idx: int) -> List[cv2.KeyPoint]:
         """
         calculate orientations for each keypoint
         """
@@ -269,7 +269,7 @@ class SIFT:
         return keypoints
 
 
-    def remove_duplicated_sorted(self, keypoints: list[cv2.KeyPoint]) -> list[cv2.KeyPoint]:
+    def remove_duplicated_sorted(self, keypoints: List[cv2.KeyPoint]) -> List[cv2.KeyPoint]:
         """
         remove duplicated keypoints and sort it
         """
@@ -285,7 +285,7 @@ class SIFT:
                 unique_keypoints.append(next_keypoint)
         return unique_keypoints
         
-    def convert_keypoints_size(self, keypoints: list[cv2.KeyPoint]) -> list[cv2.KeyPoint]:
+    def convert_keypoints_size(self, keypoints: List[cv2.KeyPoint]) -> List[cv2.KeyPoint]:
         """
         convert keypoints to input image size
         """
@@ -310,7 +310,7 @@ class SIFT:
         return octave, layer, scale
 
         
-    def calc_sift_descriptors(self, keypoints: list[cv2.KeyPoint], images: np.ndarray) -> np.ndarray:
+    def calc_sift_descriptors(self, keypoints: List[cv2.KeyPoint], images: np.ndarray) -> np.ndarray:
         """
         calulate sift descriptors for each keypoint
         """
