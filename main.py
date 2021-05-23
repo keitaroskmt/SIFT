@@ -30,6 +30,7 @@ if __name__ == '__main__':
     
     sift_matches = cv2.drawMatchesKnn(img1, kp1, img2, kp2, good, None, flags=2)
 
-    # plt.imshow(sift_matches, cmap='gray')
-    # plt.show()
-    cv2.imwrite("./images/result.jpeg", sift_matches)
+    plt.imshow(sift_matches, cmap='gray')
+    plt.show()
+    # save result
+    # cv2.imwrite("./images/result.jpeg", sift_matches)
