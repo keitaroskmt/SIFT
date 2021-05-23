@@ -1,17 +1,26 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+from sift import SIFT
 
 if __name__ == '__main__':
-    size = (1700, 2000)
-    img1 = cv2.imread('./images/dict1.jpeg')
-    img2 = cv2.imread('./images/dict2.jpeg')
+    # size = (1700, 2000)
+    size = (400, 500)
+    img1 = cv2.imread('./images/dict1.jpeg', 0)
+    img2 = cv2.imread('./images/dict2.jpeg', 0)
     img1 = cv2.resize(img1, size)
     img2 = cv2.resize(img2, size)
     
-    sift = cv2.xfeatures2d.SIFT_create()
-    kp1, des1 = sift.detectAndCompute(img1, None)
-    kp2, des2 = sift.detectAndCompute(img2, None)
+    sift = SIFT()
+    kp1, des1 = sift.detect_and_compute(img1)
+    kp2, des2 = sift.detect_and_compute(img2)
+    
+    print(len(kp1))
+    print(des1.shape)
+
+    # sift = cv2.xfeatures2d.SIFT_create()
+    # kp1, des1 = sift.detectAndCompute(img1, None)
+    # kp2, des2 = sift.detectAndCompute(img2, None)
     
     bf = cv2.BFMatcher()
     matches = bf.knnMatch(des1, des2, k=2)
@@ -25,5 +34,3 @@ if __name__ == '__main__':
 
     plt.imshow(sift_matches, cmap='gray')
     plt.show()
-    
-

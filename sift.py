@@ -9,6 +9,7 @@ class SIFT:
     contrast_threshold: float
     img_border: int  # width of border in which to ignore keypoints
     max_interp_steps: int # maximum steps of keypoint interpolation before failure
+    ori_sig_fctr: float # determines gaussian sigma for orientation assignment
     descr_scl_fctr: float # determines the size of a single descriptor orientation histogram
     descr_mag_thr: float # threshold on magnitude of elements of descriptor vector
     flt_epsilon: float
@@ -20,6 +21,7 @@ class SIFT:
         self.contrast_threshold = 0.04
         self.img_border = 5
         self.max_interp_steps = 5
+        self.ori_sig_fctr = 1.5
         self.descr_scl_fctr = 3.0
         self.descr_mag_thr = 0.2
         self.flt_epsilon = 1e-7
@@ -30,7 +32,7 @@ class SIFT:
         main function
         """
         init_image = self.create_initial_image(image)
-        n_octaves = self.compute_num_octaves(init_image.shape)
+        n_octaves = self.compute_n_octaves(init_image.shape)
         gaussian_pyramid = self.build_gaussian_pyramid(init_image, n_octaves)
         dog_pyramid = self.build_dog_pyramid(gaussian_pyramid)
         keypoints = self.find_scale_space_extrema(gaussian_pyramid, dog_pyramid)
@@ -76,15 +78,16 @@ class SIFT:
         images = []
         for _ in range(n_octaves):
             images_in_octave = []
+            images_in_octave.append(image)
             for sig in sigs[1:]:
                 image = cv2.GaussianBlur(image, None, sigmaX=sig, sigmaY=sig)
                 images_in_octave.append(image)
             images.append(images_in_octave)
             # self.n_octave_layers == n_images_per_octave - 3 
             base = images_in_octave[-3]
-            image = cv2.resize(base, None, fx=0.5, fy=0.5)
+            image = cv2.resize(base, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_NEAREST)
 
-        return np.array(images)
+        return np.array(images, dtype=object)
     
 
     def build_dog_pyramid(self, images: np.ndarray) -> np.ndarray:
@@ -98,7 +101,7 @@ class SIFT:
                 dog_images_in_octave.append(cv2.subtract(second_image, first_image))
             dog_images.append(dog_images_in_octave)
 
-        return np.array(dog_images)
+        return np.array(dog_images, dtype=object)
         
     
     def find_scale_space_extrema(self, images: np.ndarray, dog_images: np.ndarray) -> list[cv2.KeyPoint]:
@@ -112,11 +115,11 @@ class SIFT:
                 for row in range(self.img_border, cur_image.shape[0] - self.img_border):
                     for col in range(self.img_border, cur_image.shape[1] - self.img_border):
                         if self.is_extreme(prev_image[row-1:row+2, col-1:col+2], cur_image[row-1:row+2, col-1:col+2], next_image[row-1:row+2, col-1:col+2]):
-                            res = self.adjust_local_extrema(dog_images_in_octave, row, col, image_idx, octave_idx, self.sigma)
+                            res = self.adjust_local_extrema(dog_images_in_octave, row, col, image_idx + 1, octave_idx, self.sigma)
                             
-                            if not res:
+                            if res:
                                 keypoint, new_image_idx = res
-                                keypoint_with_orientations = self.calc_keypoint_with_orientations(keypoint, octave_idx, images[octave_idx][new_image_idx])
+                                keypoint_with_orientations = self.calc_keypoint_with_orientations(keypoint, images[octave_idx][new_image_idx], octave_idx)
                                 for keypoint_with_orientation in keypoint_with_orientations:
                                     keypoints.append(keypoint_with_orientation)
         return keypoints
@@ -137,14 +140,14 @@ class SIFT:
         return False
         
         
-    def adjust_local_extrema(self, dog_images_in_ocatave: np.ndarray, row: int, col: int, image_idx: int, octave_idx: int, sigma: float) -> Optional[cv2.KeyPoint]:
+    def adjust_local_extrema(self, dog_images_in_octave: np.ndarray, row: int, col: int, image_idx: int, octave_idx: int, sigma: float) -> Optional[cv2.KeyPoint]:
         """
         adjust pixel positions of scale-space extrema
         """
-        image_shape = dog_images_in_ocatave[0].shape
+        image_shape = dog_images_in_octave[0].shape
 
         for i in range(self.max_interp_steps):
-            prev_image, cur_image, next_image = dog_images_in_ocatave[image_idx-1:image_idx+2]
+            prev_image, cur_image, next_image = dog_images_in_octave[image_idx-1:image_idx+2]
             # [0, 255] -> [0, 1]
             pixel_cube = np.array([prev_image[row-1:row+2, col-1:col+2], cur_image[row-1:row+2, col-1:col+2], next_image[row-1:row+2, col-1:col+2]]).astype('float32') / 255.0
             
@@ -174,8 +177,8 @@ class SIFT:
             if (abs(x[0]) < 0.5 and abs(x[1]) < 0.5 and abs(x[2]) < 0.5):
                 break
             
-            row += int(np.round(x[0]))
-            col += int(np.round(x[1]))
+            col += int(np.round(x[0]))
+            row += int(np.round(x[1]))
             image_idx += int(np.round(x[2]))
             
             if image_idx < 1 or image_idx > self.n_octave_layers or row < self.img_border or row >= image_shape[0] - self.img_border or col < self.img_border or col >= image_shape[1] - self.img_border:
@@ -201,21 +204,21 @@ class SIFT:
             return None
             
         keypoint = cv2.KeyPoint()
-        keypoint.pt = (row + x[0]) * (2 ** octave_idx), (col + x[1]) * (2 ** octave_idx)
-        keypoint.octave = octave_idx + (image_idx << 8) + ((np.round(x[2] + 0.5) * 255) << 16)
+        keypoint.pt = (col + x[0]) * (2 ** octave_idx), (row + x[1]) * (2 ** octave_idx)
+        keypoint.octave = octave_idx + (image_idx << 8) + (int(np.round((x[2] + 0.5) * 255)) * (1 << 16))
         keypoint.size = sigma * (2 ** ((image_idx + x[2]) / self.n_octave_layers)) * (2 ** (octave_idx + 1))
         keypoint.response = abs(contr)
         
         return (keypoint, image_idx)
         
 
-    def calc_keypoint_with_orientations(self, keypoint: cv2.KeyPoint, image: np.ndarray, octave_idx: int, sigma: float) -> list[cv2.KeyPoint]:
+    def calc_keypoint_with_orientations(self, keypoint: cv2.KeyPoint, image: np.ndarray, octave_idx: int) -> list[cv2.KeyPoint]:
         """
         calculate orientations for each keypoint
         """
         scl_octv = keypoint.size * 0.5 / (2 ** octave_idx)
         radius = int(np.round(4.5 * scl_octv))
-        expf_scale = -1.0 / (2.0 * (sigma ** 2))
+        expf_scale = -1.0 / (2.0 * ((self.ori_sig_fctr * scl_octv) ** 2))
         num_bins = 36
         raw_hist = np.zeros(num_bins)
         smooth_hist = np.zeros(num_bins)
@@ -295,7 +298,7 @@ class SIFT:
         return converted_keypoints
 
 
-    def unpack_octave(keypoint: cv2.Keypoint) -> Tuple[int, int, float]:
+    def unpack_octave(keypoint: cv2.KeyPoint) -> Tuple[int, int, float]:
         """
         return octave, layer, scale from keypoint
         """
@@ -307,7 +310,7 @@ class SIFT:
         return octave, layer, scale
 
         
-    def calc_sift_descriptors(self, keypoints: list[cv2.Keypoint], images: np.ndarray) -> np.ndarray:
+    def calc_sift_descriptors(self, keypoints: list[cv2.KeyPoint], images: np.ndarray) -> np.ndarray:
         """
         calulate sift descriptors for each keypoint
         """
@@ -319,13 +322,11 @@ class SIFT:
             octave, layer, scale = SIFT.unpack_octave(keypoint)
             image = images[octave+1, layer] 
             num_rows, num_cols = image.shape
-            point = round(scale * np.array(keypoint.pt)).astype('int')
+            point = np.round(scale * np.array(keypoint.pt)).astype('int')
             
             angle = 360.0 - keypoint.angle
             cos_t = np.cos(np.deg2rad(angle))
             sin_t = np.sin(np.deg2rad(angle))
-            cos_t /= hist_width
-            sin_t /= hist_width
             
             bins_per_deg = num_bins / 360.0
             exp_scale = -1.0 / (window_width ** 2 * 0.5)
@@ -334,6 +335,9 @@ class SIFT:
             radius = int(np.round(hist_width * np.sqrt(2) * (window_width + 1) * 0.5))
             # clip the radius to the diagonal of the image to avoid autobuffer too large exception
             radius = min(radius, int(np.sqrt(num_rows ** 2 + num_cols ** 2)))
+
+            cos_t /= hist_width
+            sin_t /= hist_width
             
             row_bin_list = []
             col_bin_list = []
@@ -355,9 +359,9 @@ class SIFT:
                         if window_row > 0 and window_row < num_rows - 1 and window_col > 0 and window_col < num_cols - 1:
                             dx = image[window_row, window_col+1] - image[window_row, window_col-1]
                             dy = image[window_row-1, window_col] - image[window_row+1, window_col]
-                            weight = np.exp(col_rot ** 2 + row_rot ** 2) * exp_scale
+                            weight = np.exp((col_rot ** 2 + row_rot ** 2) * exp_scale)
                             mag = np.sqrt(dx ** 2 + dy ** 2)
-                            ori = (np.rad2deg(np.arctan2(dy, dx))) % 360
+                            ori = np.rad2deg(np.arctan2(dy, dx)) % 360
                             row_bin_list.append(row_bin)
                             col_bin_list.append(col_bin)
                             mag_list.append(weight * mag)
@@ -400,9 +404,9 @@ class SIFT:
                 
             # window_width * window_width * num_bins = 128
             descriptor = hist[1:-1, 1:-1, :].flatten()
-            threshold = np.norm(descriptor) * self.descr_mag_thr
+            threshold = np.linalg.norm(descriptor) * self.descr_mag_thr
             descriptor[descriptor > threshold] = threshold
-            descriptor /= max(np.norm(descriptor), self.flt_epsilon)
+            descriptor /= max(np.linalg.norm(descriptor), self.flt_epsilon)
             # convert float descriptor to unsigned char 
             descriptor = np.round(512 * descriptor)
             descriptor[descriptor < 0] = 0
